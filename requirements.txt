@@ -9,9 +9,16 @@ Pillow==9.5.0
 PyYAML==6.0
 pyiqa==0.1.10
 huggingface_hub==0.25.0
-basicsr
+# basicsr 需要手动安装（不能直接放在 requirements.txt 里）：
+#   1. pip install "setuptools<81"                        # 老 torch.utils.cpp_extension 需要 pkg_resources，setuptools>=81 已移除
+#   2. pip install basicsr==1.4.2 --no-deps --no-build-isolation
+#      --no-deps：绕过 basicsr 对 tb-nightly 的依赖（清华源没有，lora 里已有 tensorboard 代替）
+#      --no-build-isolation：让它用当前环境里的 torch 2.0.1 来构建
 loralib
 fairscale
 numpy==1.24
-jax[cpu]==0.4.13
-jaxlib[cpu]==0.4.13
+# jax / jaxlib：requirements 原锁定 0.4.13，但清华源已无 jaxlib==0.4.13（最低 0.4.18），
+# 已改为不锁版本，当前装的是 0.4.38。如需严格 0.4.13，用：
+#   pip install jax[cpu]==0.4.13 -i https://pypi.org/simple/
+jax[cpu]
+jaxlib[cpu]
