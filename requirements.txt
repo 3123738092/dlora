@@ -22,3 +22,23 @@ numpy==1.24
 #   pip install jax[cpu]==0.4.13 -i https://pypi.org/simple/
 jax[cpu]
 jaxlib[cpu]
+
+# ---------- cross_frame_retrieval 依赖 (原仓库缺失) ----------
+# src/cross_frame_retrieval/cfr_main.py 依赖 mmcv.ops / mmengine，但作者没写进 requirements。
+# mmengine 直接 pip 可装；mmcv 必须按 torch+cuda 版本选 wheel：
+#
+#   pip install openmim                                    # 可选，方便以后装其它 mm* 系列
+#   pip install mmengine==0.10.7
+#
+#   # torch 2.0.1 + cu117 （本仓库默认版本）:
+#   pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu117/torch2.0/index.html
+#   # 若你装的是 torch 2.0.1 + cu118：
+#   # pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.0/index.html
+#
+# 装完验证：
+#   python -c "from mmcv.ops import ModulatedDeformConv2d; from mmengine.model import BaseModule; print(\"ok\")"
+#
+# 注意：openmim 的安装脚本会把 setuptools 降到 60.x，与上文 basicsr 所需的 setuptools<81 并不冲突，
+# 但装完 mmcv 后再 pip install "setuptools<81" 重新固定一次更稳。
+mmengine==0.10.7
+# mmcv==2.1.0   # 解注需手动用上面的 -f 源，直接 pip 会装错 cuda 版本
