@@ -540,17 +540,27 @@ class CFR_model(BaseModule):
                  max_residue_magnitude=10,
                  is_low_res_input=True,
                  spynet_pretrained=None,
-                 cpu_cache_length=100):
+                 cpu_cache_length=100,
+                 flow_estimator='spynet'):
 
         super().__init__()
         self.mid_channels = mid_channels
         self.is_low_res_input = is_low_res_input
         self.cpu_cache_length = cpu_cache_length
+        self.flow_estimator_name = flow_estimator
 
         # feature extraction module
         self.feat_extract = ResidualBlocksWithInputConv(4, mid_channels, 5)
-        # optical flow
-        self.spynet = SPyNet(pretrained=spynet_pretrained)
+        # optical flow (W4: spynet | raft)
+        if flow_estimator == 'raft':
+            from src.cross_frame_retrieval.raft_flow import RAFTFlowEstimator
+            self.flow_net = RAFTFlowEstimator(pretrained=True, small=True)
+            self.spynet = self.flow_net  # alias so existing ``self.spynet(a,b)`` calls dispatch to RAFT
+        elif flow_estimator == 'spynet':
+            self.spynet = SPyNet(pretrained=spynet_pretrained)
+            self.flow_net = self.spynet
+        else:
+            raise ValueError(f"unknown flow_estimator: {flow_estimator!r}")
 
         self.cross_attn_module = CrossFrameAbsoluteAttn(
             in_channels=4,

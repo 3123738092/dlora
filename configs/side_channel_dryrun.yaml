@@ -1,0 +1,35 @@
+seed: 42
+output_dir: /nas-files/yuhanchen/lora/DLoRAL/runs/sidechannel_dryrun
+batch_size: 1
+num_workers: 0
+max_steps: 2
+log_every: 1
+save_every: 2
+lr: 1.0e-4
+min_lr: 1.0e-6
+weight_decay: 0.0
+lambda_lpips: 0.5
+detail_net:
+  in_ch: 6
+  out_ch: 3
+  base_ch: 128
+  num_blocks: 16
+gate_net:
+  in_ch: 6
+  base_ch: 64
+  init_open_logit: 2.0
+data:
+  reds_root: /data/yuhanchen/CV/data/reds/train/train_sharp
+  deg_yaml: params.yml
+  hr_size: 512
+  num_frames: 2
+dloral:
+  pretrained_path: /nas-files/yuhanchen/lora/DLoRAL/preset/models/checkpoints/model.pkl
+  pretrained_model_path: /nas-files/yuhanchen/lora/DLoRAL/preset_models/stable-diffusion-2-1-base
+  vae_encoder_tiled_size: 4096
+  vae_decoder_tiled_size: 224
+  latent_tiled_size: 96
+  latent_tiled_overlap: 32
+  load_cfr: true
+  mixed_precision: fp16
+  process_size: 512

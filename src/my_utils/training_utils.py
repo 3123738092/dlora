@@ -230,6 +230,9 @@ def parse_args(input_args=None):
 
     parser.add_argument("--cfg_csd", default=7.5, type=float)
     parser.add_argument("--load_cfr", action="store_true", )
+    parser.add_argument("--flow_estimator", type=str, choices=["spynet", "raft"], default="spynet",
+                        help="optical flow network (spynet=original, raft=more accurate)")
+    parser.add_argument("--train_cfr_only", action="store_true", help="CFR-only fine-tuning mode: freeze UNet/LoRA, train only CFR backbone")
     parser.add_argument("--pretrained_model_path_csd", default='pretrained_model_path_csd', type=str)
 
     if input_args is not None:
@@ -1884,7 +1887,7 @@ class PairedSROnlineTxtDataset_Pexel_and_REDS_and_LSDIRshift(torch.utils.data.Da
         elif "REDS" in gt_img_path:
             gt_frames_dir = os.path.dirname(gt_img_path)  # .../GT_frames
             parent_dir = os.path.dirname(gt_frames_dir)  # .../560818491_1
-            img_t_dir = os.path.join(parent_dir, "LR_frames")
+            img_t_dir = os.path.join(gt_frames_dir, "LR_frames")
 
             gt_frame_name = os.path.basename(gt_img_path)  # 例如，frame_1.png
             gt_frame_num_str = gt_frame_name.split('.')[0].split('_')[-1]  # '1'

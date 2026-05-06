@@ -427,7 +427,7 @@ class Generator(torch.nn.Module):
     def forward(self, c_t, batch=None, args=None):
         b, t, c, h, w = c_t.shape
 
-        c_t = c_t.reshape(b * t, c, h, w)
+        c_t = c_t.view(b * t, c, h, w)
         encoded_control = self.vae_fix.encode(c_t).latent_dist.sample() * self.vae_fix.config.scaling_factor
 
         uncertainty_map = batch["difference_mask"]

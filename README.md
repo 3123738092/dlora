@@ -181,3 +181,140 @@ The following are BibTeX references:
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2506.15591}, 
 }
+
+---
+
+## Side-Channel Extension (CV course P1)
+
+> Custom extension on top of upstream DLoRAL. Adds a pixel-space residual head
+> bypassing the lossy 8× VAE to recover high-frequency detail. Upstream code is
+> unchanged; new modules live under `src/side_channel/`.
+
+### What was added
+
+| File | Purpose |
+| --- | --- |
+| `src/side_channel/__init__.py` | Package entry — exports `DetailNet`, `GateNet`, `SideChannelWrapper`. |
+| `src/side_channel/detail_net.py` | ResNet-style residual predictor (`d_t`, ~4.88M params, zero-init tail). |
+| `src/side_channel/gate_net.py` | Symmetric U-Net producing per-pixel α ∈ [0,1] (~1.88M params, sigmoid bias init = 2.0). |
+| `src/side_channel/side_channel_wrapper.py` | Combines them as `y_final = y_coarse + α · d_t`. |
+| `src/side_channel/dataset.py` | REDS multi-frame loader with on-the-fly Real-ESRGAN degradation. |
+| `src/train_side_channel.py` | Accelerate-based DDP training loop (frozen DLoRAL → side-channel). |
+| `configs/side_channel.yaml` | Training config (5000 steps, lr=1e-4, λ_lpips=0.5, hr_size=512, num_frames=2). |
+| `configs/side_channel_dryrun.yaml` | 2-step smoke config for plumbing checks. |
+| `scripts/train_sidechannel.sh` | Multi-GPU launcher (`accelerate launch --num_processes=N`). |
+| `requirements.txt` | Added `mmengine==0.10.7`, `mmcv==2.1.0` (cu117/torch2.0 wheel), `lpips==0.1.4`. |
+
+### Architecture
+
+```
+LR ──Real-ESRGAN───────► HR_target          (training only)
+       │
+       └─bicubic-up──► x_up ──┐
+                              ├─► frozen DLoRAL ──► y_coarse  (8× VAE bottleneck)
+   neighbor frame ────────────┘
+                              │
+                              ▼
+              SideChannelWrapper(x_up, y_coarse)
+                  ├─ DetailNet → d_t   (~4.88M, residual)
+                  └─ GateNet   → α     (~1.88M, gating)
+                              │
+                              ▼
+                 y_final = y_coarse + α · d_t
+```
+
+Zero-init guarantees `y_final == y_coarse` at step 0 — never degrades the baseline.
+Window last frame (`[:, -1]`) is supervised, matching DLoRAL's output convention
+(`src_idx = input_image_index + start + 1`).
+
+### Reproducing the training run
+
+Prereq: REDS train clips at `/data/yuhanchen/CV/data/reds/train/train_sharp/{000..269}/*.png`,
+DLoRAL checkpoint at `preset/models/checkpoints/model.pkl`,
+SD-2.1 base at `preset_models/stable-diffusion-2-1-base/`,
+`params.yml` at `src/datasets/params.yml` (Real-ESRGAN degradation settings, included).
+
+Smoke test (2 steps, single GPU):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python src/train_side_channel.py \
+    --config configs/side_channel_dryrun.yaml
+```
+
+Production training (2 GPUs, ~80 min wallclock):
+
+```bash
+GPU_IDS=0,1 bash scripts/train_sidechannel.sh
+# equivalent to:
+# CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
+#   --num_processes=2 --num_machines=1 --mixed_precision=no \
+#   src/train_side_channel.py --config configs/side_channel.yaml
+```
+
+Checkpoints land in `runs/sidechannel_v2_lastframe/sidechannel_step{000500..005000}.pt`
+(saved every 500 steps).
+
+### Datasets used
+
+* **Train**: REDS `train_sharp` (270 clips × 100 frames, 23,760 sliding-window samples
+  with `num_frames=2`) — already present at `/data/yuhanchen/CV/data/reds/`.
+* **Eval (UDM10)**: reproduced via VRT release tarball; converted BDx4 PNGs to mp4 with
+  `ffmpeg -framerate 10 -i frame_%08d.png -c:v libx264 -pix_fmt yuv420p -crf 12`.
+* **Eval (REDS4)**: subset of REDS val (`val_sharp/{000,011,015,020}`) — already on disk.
+* **Eval (SPMCS / VideoLQ / RealVSR)**: pending manual download by user; place under
+  `/nas-files/yuhanchen/CV/data/test_sets/`.
+
+### Inference with side-channel (W3, done)
+
+Two new CLI flags on `src/test_DLoRAL.py` (default off → identical to upstream):
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--sidechannel_ckpt PATH` | `None` | Path to a `sidechannel_step*.pt`. Disabled when omitted. |
+| `--sidechannel_alpha_scale FLOAT` | `1.0` | Multiplier on gate α at inference. `0.0` ≡ disabled, `1.0` ≡ as trained, `>1` exaggerates the residual (debug only). |
+
+Behaviour: after the frozen DLoRAL produces `output_image` (window last frame), the
+wrapper computes `y_final = y_coarse + α · d_t` in `[0,1]` space, then re-maps to
+`[-1,1]` for the existing color-fix / save path. `output_image[0]` and the
+`adain`/`wavelet` color correction downstream see the corrected tensor without
+further changes.
+
+Reference command (UDM10, GPU 0):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+CUDA_VISIBLE_DEVICES=0 \
+/nas-files/yuhanchen/miniconda3/envs/lora/bin/python src/test_DLoRAL.py \
+    --pretrained_model_path preset_models/stable-diffusion-2-1-base \
+    --pretrained_model_name_or_path preset_models/stable-diffusion-2-1-base \
+    --ram_ft_path preset/models/DAPE.pth \
+    --ram_path  preset/models/ram_swin_large_14m.pth \
+    --merge_and_unload_lora False \
+    --process_size 512 --vae_encoder_tiled_size 4096 \
+    --load_cfr --pretrained_path preset/models/checkpoints/model.pkl \
+    --stages 1 --align_method adain \
+    --sidechannel_ckpt runs/sidechannel_v2_lastframe/sidechannel_step005000.pt \
+    -i /nas-files/yuhanchen/tmp/sc_test_w3_in \
+    -o /nas-files/yuhanchen/tmp/sc_test_w3_out
+```
+
+Notes:
+* `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1` keep `bert-base-uncased` and SD weights
+  resolution local; default `~/.cache/huggingface/hub` already has the snapshots.
+* Patch backup at `src/test_DLoRAL.py.bak_w3` (use `diff` to inspect the four
+  insertion points: import / argparse / wrapper init / inference hook).
+
+### Roadmap
+
+| Sprint | Status | Deliverable |
+| --- | --- | --- |
+| W1 | ✅ done | UDM10 baseline reproduced (frame-by-frame DLoRAL output saved). |
+| W2 | ✅ done | `src/side_channel/` package + 5000-step DDP training run; loss `l1 0.30→0.06`, `lpips 0.70→0.32`, gate α settled around 0.71. |
+| W3 | ✅ done | `--sidechannel_ckpt` flag; pixel-space residual hooked into inference tail. |
+| W4 | ⏳ pending | SpyNet → RAFT inside `src/cross_frame_retrieval/cfr_main.py`; expected ~0.5–1 dB PSNR on large-motion clips. |
+| W5 | ⏳ pending | Full benchmark sweep (UDM10 / SPMCS / VideoLQ / RealVSR) + ablations: α=0 (baseline), α=1 (trained), gate-disabled (α≡1). |
+| W6 | ⏳ pending | Course report + visualisations (gate heatmaps, OCR delta on small-text clips). |
+
+Pending data-side work: SPMCS / VideoLQ / RealVSR test sets to be downloaded into
+`/nas-files/yuhanchen/CV/data/test_sets/` before W5.
+

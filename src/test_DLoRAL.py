@@ -14,6 +14,7 @@ from src.DLoRAL_model import Generator_eval
 from src.my_utils.wavelet_color_fix import adain_color_fix, wavelet_color_fix
 import PIL.Image
 import math
+from src.side_channel import DetailNet, GateNet, SideChannelWrapper
 PIL.Image.MAX_IMAGE_PIXELS = 933120000
 
 import glob
@@ -148,12 +149,30 @@ if __name__ == "__main__":
     # stages
     parser.add_argument("--stages", type=int, default=None)
     parser.add_argument("--load_cfr", action="store_true", )
+    parser.add_argument("--flow_estimator", type=str, choices=["spynet", "raft"], default="spynet",
+                        help="optical flow network (spynet=original, raft=more accurate)")
+    # side-channel (W3)
+    parser.add_argument("--sidechannel_ckpt", type=str, default=None,
+                        help="Path to side-channel .pt. Disabled when None.")
+    parser.add_argument("--sidechannel_alpha_scale", type=float, default=1.0,
+                        help="Multiplier on gate alpha at inference (1.0=as trained, 0.0=disabled).")
 
     args = parser.parse_args()
 
     # initialize the model
     model = Generator_eval(args)
     model.set_eval()
+
+    sidechannel = None
+    if args.sidechannel_ckpt is not None:
+        print(f"[SideChannel] loading {args.sidechannel_ckpt}")
+        sidechannel = SideChannelWrapper().cuda().eval()
+        ckpt_sc = torch.load(args.sidechannel_ckpt, map_location="cuda")
+        sd = ckpt_sc["wrapper"] if isinstance(ckpt_sc, dict) and "wrapper" in ckpt_sc else ckpt_sc
+        sidechannel.load_state_dict(sd, strict=True)
+        for p in sidechannel.parameters():
+            p.requires_grad_(False)
+        print(f"[SideChannel] loaded; alpha_scale={args.sidechannel_alpha_scale}")
 
     if os.path.isdir(args.input_image):
         all_video_data = process_video_directory(args.input_image)
@@ -314,6 +333,15 @@ if __name__ == "__main__":
                 c_t = input_image_final.unsqueeze(0).cuda() * 2 - 1
                 c_t = c_t.to(dtype=weight_dtype)
                 output_image, _, _, _, _ = model(stages=args.stages, c_t=c_t, uncertainty_map=uncertainty_map.unsqueeze(0).cuda(), prompt=validation_prompt, weight_dtype=weight_dtype)
+
+            if sidechannel is not None:
+                with torch.no_grad():
+                    y_coarse_01 = (output_image.float() * 0.5 + 0.5).clamp(0, 1)
+                    x_up_01 = (c_t[:, -1].float() * 0.5 + 0.5).clamp(0, 1)
+                    y_final, aux = sidechannel(x_up_01, y_coarse_01, return_aux=True)
+                    if abs(args.sidechannel_alpha_scale - 1.0) > 1e-6:
+                        y_final = y_coarse_01 + args.sidechannel_alpha_scale * aux["alpha"] * aux["d_t"]
+                    output_image = (y_final * 2 - 1).clamp(-1, 1).to(dtype=weight_dtype)
 
             frame_t = output_image[0]  # shape: [c, h, w]
             frame_t = (frame_t.cpu() * 0.5 + 0.5)  # Convert the frame back to range [0, 1]
